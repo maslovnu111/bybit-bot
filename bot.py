@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
@@ -30,28 +32,27 @@ def save_memory(data):
 
 def get_browser():
     chrome_options = Options()
-    chrome_options.add_argument("--headless") 
+    # МАГІЧНА КУЛЯ: Новий режим headless, який не розпізнається Cloudflare/Akamai
+    chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
     
-    # СТЕЛС НАЛАШТУВАННЯ: Вимикаємо прапорці автоматизації в Chrome
+    # Вимикаємо прапорці автоматизації
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+    # Ми ПРИБРАЛИ жорсткий User-Agent, щоб --headless=new згенерував свій, ідеально валідний!
     
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     
-    # ГЛИБОКА ІНЖЕКЦІЯ (CDP): Видаляємо сліди бота DO завантаження скриптів сайту
+    # Глибока інжекція (CDP) залишається для страховки
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'languages', { get: () => ['uk-UA', 'uk', 'en-US', 'en'] });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
         """
     })
     return driver
@@ -61,20 +62,26 @@ def check_easy_earn(memory):
     driver = get_browser()
     try:
         driver.get("https://www.bybit.com/uk-UA/earn/easy-earn/")
-        time.sleep(10) 
+        print("[ДЕБАГ] Очікуємо 12 секунд для первинного завантаження та проходження перевірки Cloudflare...")
+        time.sleep(12) 
 
-        # Покроковий скролінг для тригеру завантаження карток пулів
-        print("[ДЕБАГ] Імітуємо прокрутку екрана людиною...")
-        for position in [400, 800, 1200, 1600]:
-            driver.execute_script(f"window.scrollTo(0, {position});")
-            time.sleep(2.5)
+        # ФІЗИЧНА ІМІТАЦІЯ КЛАВІАТУРИ: Натискаємо Page Down, щоб Bybit повірив, що це людина
+        print("[ДЕБАГ] Імітуємо натискання клавіші Page Down...")
+        try:
+            body = driver.find_element(By.TAG_NAME, 'body')
+            for i in range(6):
+                body.send_keys(Keys.PAGE_DOWN)
+                time.sleep(2) # Пауза між натисканнями
+                print(f"[ДЕБАГ] Скрол {i+1}/6 виконано")
+        except Exception as e:
+            print(f"[ДЕБАГ] Не вдалося використати клавіатуру, помилка: {e}")
         
-        driver.execute_script("window.scrollTo(0, 300);")
-        time.sleep(2)
+        # Повертаємось трохи вгору, щоб переконатись, що таблиця в зоні видимості
+        driver.execute_script("window.scrollTo(0, 800);")
+        time.sleep(3)
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
-        # Вирізаємо технічне сміття
         for tech in soup(["script", "style", "noscript", "textarea", "svg", "form", "head"]):
             tech.decompose()
         
@@ -88,14 +95,12 @@ def check_easy_earn(memory):
             if not parent_box:
                 continue
             
-            # Склеюємо текст сусідніх блоків (захист від розірваних тегів)
             combined_text = parent_box.get_text(separator=" ")
             if parent_box.parent:
                 combined_text += " " + parent_box.parent.get_text(separator=" ")
                 
             clean_str = " ".join(combined_text.split())
             
-            # Шукаємо числа біля % (враховуємо українські коми)
             pct_matches = re.findall(r'(\d+(?:[.,]\d+)?)\s*%', clean_str)
             if not pct_matches:
                 continue
@@ -113,8 +118,7 @@ def check_easy_earn(memory):
                         coin_name = "Шукаємо..."
                         duration = "Гнучкий / Фіксований"
                         
-                        # Збір контексту з картки (до 10 рівнів вгору)
-                        for _ in range(10):
+                        for _ in range(12): # Збільшив глибину пошуку картки
                             if not current_element.parent:
                                 break
                             current_element = current_element.parent
@@ -153,7 +157,6 @@ def check_easy_earn(memory):
                 except ValueError:
                     continue
 
-        # Фільтрація дублікатів
         unique_coins = {}
         for item in found_items:
             coin_id = f"{item['coin']}_{item['pct']}"
@@ -161,7 +164,6 @@ def check_easy_earn(memory):
 
         print(f"[ДЕБАГ] Після очищення знайдено реальних пулів > 100%: {len(unique_coins)}")
 
-        # Надсилання сповіщень
         for coin_id, item in unique_coins.items():
             if coin_id not in memory["coins"]:
                 memory["coins"].append(coin_id)
