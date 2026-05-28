@@ -9,7 +9,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
-# Зчитуємо секретні токени з налаштувань GitHub
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
@@ -41,68 +40,68 @@ def get_browser():
     return driver
 
 def check_easy_earn(memory):
-    print("Перевірка Easy Earn...")
+    print("=== ЗАПУСК ПЕРЕВІРКИ EASY EARN ===")
     driver = get_browser()
     try:
         driver.get("https://www.bybit.com/uk-UA/earn/easy-earn/")
-        time.sleep(12) # Даємо сторінці трохи більше часу на завантаження скриптів таблиць
+        time.sleep(15) # Збільшуємо час очікування до 15 секунд для гарантованого завантаження скриптів
+
+        print(f"[ДЕБАГ] Заголовок сторінки Bybit: {driver.title}")
+        print(f"[ДЕБАГ] Розмір завантаженого HTML: {len(driver.page_source)} символів")
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         found_items = []
         
-        # Скануємо всі інформаційні блоки (рядки таблиць tr та блоки карток div)
-        for tag in soup.find_all(['tr', 'div']):
+        # Шукаємо блоки, які можуть бути картками або рядками таблиці
+        all_blocks = soup.find_all(['div', 'tr'])
+        print(f"[ДЕБАГ] Всього знайдено блоків (div/tr) на сторінці: {len(all_blocks)}")
+
+        for tag in all_blocks:
             text = tag.get_text(separator=" ").strip()
-            text = " ".join(text.split()) # Очищаємо від зайвих пробілів та переносів
+            text = " ".join(text.split()) # Очищаємо від зайвих пробілів
             
-            # Пропускаємо глобальні великі блоки сайту або занадто малі тексти
-            if len(text) > 350 or len(text) < 10:
-                continue
-            
-            # Шукаємо всі згадки відсотків за допомогою Regex (наприклад: 555.00% або 777.00%)
-            pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', text)
-            if pct_matches:
-                # Перетворюємо знайдені текстові відсотки на дробові числа
-                pct_floats = [float(m) for m in pct_matches]
-                highest_pct = max(pct_floats) # Беремо найбільший відсоток з блоку
+            # Шукаємо блоки, де є знак % і логічні маркери стейкінгу Bybit
+            if "%" in text and any(word in text for word in ["APR", "Тривалість", "Інвестувати", "Дн"]):
                 
-                # Нова умова: перевіряємо, чи відсоток більший за 100%
-                if highest_pct > 100:
-                    # Шукаємо тикер монети (від 3 до 6 великих літер, наприклад: USDT, XUSD, AERO)
-                    coin_match = re.search(r'\b([A-Z]{3,6})\b', text)
-                    coin_name = coin_match.group(1) if coin_match else "Знайдено"
+                # Знаходимо всі числа біля знаку %
+                pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', text)
+                if pct_matches:
+                    pct_floats = [float(m) for m in pct_matches]
+                    highest_pct = max(pct_floats)
                     
-                    # Намагаємось красиво витягнути тривалість
-                    duration = "Не вказано"
-                    if "дн" in text.lower() or "d" in text.lower():
-                        dur_match = re.search(r'(\d+\s*(?:Дн\.|D|днів|дня))', text, re.IGNORECASE)
-                        if dur_match:
-                            duration = dur_match.group(1)
-                    elif "безстроковий" in text.lower():
-                        duration = "Безстроковий"
-                    elif "фіксований" in text.lower():
-                        duration = "Фіксований"
+                    # Твоя нова умова: шукаємо тільки ті, що більші за 100%
+                    if highest_pct > 100:
+                        # Шукаємо назву монети (великі літери від 3 до 6 символів)
+                        coin_match = re.search(r'\b([A-Z]{3,6})\b', text)
+                        coin_name = coin_match.group(1) if coin_match else "Знайдено пул"
                         
-                    found_items.append({
-                        'coin': coin_name,
-                        'pct': highest_pct,
-                        'duration': duration,
-                        'full_text': text
-                    })
-        
-        # Фільтруємо дублікати (оскільки великі div блоки включають у себе менші div)
+                        # Визначаємо тривалість
+                        duration = "Флекс / Фікс"
+                        if "дн" in text.lower() or "d" in text.lower():
+                            dur_match = re.search(r'(\d+\s*(?:Дн\.|D|днів|дня))', text, re.IGNORECASE)
+                            if dur_match:
+                                duration = dur_match.group(1)
+                        
+                        found_items.append({
+                            'coin': coin_name,
+                            'pct': highest_pct,
+                            'duration': duration,
+                            'full_text': text
+                        })
+
+        # Видаляємо дублікати блоків
         unique_coins = {}
         for item in found_items:
-            # Створюємо СТАБІЛЬНИЙ ідентифікатор монети без врахування таймера зворотного відліку
             coin_id = f"{item['coin']}_{item['pct']}"
             if coin_id not in unique_coins:
                 unique_coins[coin_id] = item
             else:
-                # Якщо монета вже є, залишаємо варіант з коротшим описом (він зазвичай точніший)
                 if len(item['full_text']) < len(unique_coins[coin_id]['full_text']):
                     unique_coins[coin_id] = item
-        
-        # Надсилаємо сповіщення в Telegram
+
+        print(f"[ДЕБАГ] Знайдено унікальних пулів > 100%: {len(unique_coins)}")
+
+        # Відправка повідомлень
         for coin_id, item in unique_coins.items():
             if coin_id not in memory["coins"]:
                 memory["coins"].append(coin_id)
@@ -114,15 +113,15 @@ def check_easy_earn(memory):
                       f"🔗 Посилання: https://www.bybit.com/uk-UA/earn/easy-earn/"
                 
                 bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
-                print(f"Надіслано сповіщення про монету: {coin_id}")
+                print(f"[УСПІХ] Надіслано сповіщення про: {coin_id}")
                 
     except Exception as e:
-        print(f"Помилка Easy Earn: {e}")
+        print(f"[ПОМИЛКА] В Easy Earn: {e}")
     finally:
         driver.quit()
 
 def check_announcements(memory):
-    print("Перевірка новин...")
+    print("=== ЗАПУСК ПЕРЕВІРКИ НОВИН ===")
     driver = get_browser()
     try:
         driver.get("https://announcements.bybit.com/uk-UA/?category=&page=1")
@@ -142,17 +141,15 @@ def check_announcements(memory):
                     full_link = href if href.startswith('http') else f"https://announcements.bybit.com{href}"
                     msg = f"📰 **Нова новина з APR!**\n\n{title}\n\nЧитати: {full_link}"
                     bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
-                    print(f"Надіслано сповіщення про новину: {title}")
+                    print(f"[УСПІХ] Надіслано сповіщення про новину: {title}")
     except Exception as e:
-        print(f"Помилка новин: {e}")
+        print(f"[ПОМИЛКА] В новинах: {e}")
     finally:
         driver.quit()
 
 if __name__ == '__main__':
     current_memory = load_memory()
-    
     check_easy_earn(current_memory)
     check_announcements(current_memory)
-    
     save_memory(current_memory)
-    print("Роботу завершено, пам'ять оновлено.")
+    print("=== РОБОТУ ЗАВЕРШЕНО ===")
