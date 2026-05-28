@@ -33,12 +33,27 @@ def get_browser():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # ВСТАНОВЛЮЄМО РОЗМІР ЕКРАНА ПК: щоб Bybit розгорнув повну таблицю продуктів
     chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+    
+    # СТЕЛС НАЛАШТУВАННЯ: Вимикаємо прапорці автоматизації в Chrome
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
+    
+    # ГЛИБОКА ІНЖЕКЦІЯ (CDP): Видаляємо сліди бота DO завантаження скриптів сайту
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": """
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'languages', { get: () => ['uk-UA', 'uk', 'en-US', 'en'] });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        """
+    })
     return driver
 
 def check_easy_earn(memory):
@@ -46,21 +61,20 @@ def check_easy_earn(memory):
     driver = get_browser()
     try:
         driver.get("https://www.bybit.com/uk-UA/earn/easy-earn/")
-        time.sleep(8) 
+        time.sleep(10) 
 
-        # ПЛАВНИЙ ПОКРОКОВИЙ СКРОЛІНГ: Імітуємо коліщатко миші людини, щоб провантажити приховані картки
-        print("[ДЕБАГ] Починаємо покрокову прокрутку сторінки...")
-        for position in [500, 1000, 1500, 2000, 2500]:
+        # Покроковий скролінг для тригеру завантаження карток пулів
+        print("[ДЕБАГ] Імітуємо прокрутку екрана людиною...")
+        for position in [400, 800, 1200, 1600]:
             driver.execute_script(f"window.scrollTo(0, {position});")
-            time.sleep(2) # Даємо 2 секунди на кожному кроці для завантаження контенту
+            time.sleep(2.5)
         
-        # Повертаємось трохи вгору
-        driver.execute_script("window.scrollTo(0, 200);")
+        driver.execute_script("window.scrollTo(0, 300);")
         time.sleep(2)
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
-        # Вирізаємо технічні приховані блоки
+        # Вирізаємо технічне сміття
         for tech in soup(["script", "style", "noscript", "textarea", "svg", "form", "head"]):
             tech.decompose()
         
@@ -74,14 +88,14 @@ def check_easy_earn(memory):
             if not parent_box:
                 continue
             
-            # Склеюємо текст контейнерів, щоб цифри та % не розривались
+            # Склеюємо текст сусідніх блоків (захист від розірваних тегів)
             combined_text = parent_box.get_text(separator=" ")
             if parent_box.parent:
                 combined_text += " " + parent_box.parent.get_text(separator=" ")
                 
             clean_str = " ".join(combined_text.split())
             
-            # Шукаємо відсотки з підтримкою крапки та коми
+            # Шукаємо числа біля % (враховуємо українські коми)
             pct_matches = re.findall(r'(\d+(?:[.,]\d+)?)\s*%', clean_str)
             if not pct_matches:
                 continue
@@ -91,7 +105,6 @@ def check_easy_earn(memory):
                     clean_num = m.replace(',', '.')
                     pct = float(clean_num)
                     
-                    # Виводимо у лог абсолютно все для повної прозорості
                     if pct > 0:
                         print(f"[ДЕБАГ] Знайдено відсоток {pct}% у тексті: '{clean_str[:60]}...'")
                     
@@ -100,7 +113,7 @@ def check_easy_earn(memory):
                         coin_name = "Шукаємо..."
                         duration = "Гнучкий / Фіксований"
                         
-                        # Глибокий аналіз картки до 10 рівнів вгору
+                        # Збір контексту з картки (до 10 рівнів вгору)
                         for _ in range(10):
                             if not current_element.parent:
                                 break
