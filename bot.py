@@ -44,24 +44,38 @@ def check_easy_earn(memory):
     driver = get_browser()
     try:
         driver.get("https://www.bybit.com/uk-UA/earn/easy-earn/")
-        time.sleep(15) # Очікуємо повного завантаження карток
+        time.sleep(8) 
+
+        # ЕМУЛЯЦІЯ СКРОЛІНГУ: прокручуємо вниз і вгору для активації лінивого завантаження карток
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(4)
+        driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(3)
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
-        # КРИТИЧНО ВАЖЛИВО: Видаляємо всі приховані технічні блоки, де ховаються "привиди"
+        # Вирізаємо технічні приховані блоки
         for tech in soup(["script", "style", "noscript", "textarea", "svg", "form", "head"]):
             tech.decompose()
         
-        # Тепер шукаємо відсотки ТІЛЬКИ у видимому тексті сторінки
         percent_strings = soup.find_all(string=lambda t: t and "%" in t)
         print(f"[ДЕБАГ] Видимих елементів із знаком '%' знайдено: {len(percent_strings)}")
         
         found_items = []
 
         for s in percent_strings:
-            clean_str = " ".join(s.split())
+            parent_box = s.parent
+            if not parent_box:
+                continue
             
-            # Витягуємо числа біля знаку %
+            # СКЛЕЮВАННЯ ТЕГІВ: беремо текст батька та дідуся, щоб з'єднати розділені цифри та значок %
+            combined_text = parent_box.get_text(separator=" ")
+            if parent_box.parent:
+                combined_text += " " + parent_box.parent.get_text(separator=" ")
+                
+            clean_str = " ".join(combined_text.split())
+            
+            # Шукаємо числа біля відсотка
             pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', clean_str)
             if not pct_matches:
                 continue
@@ -70,29 +84,30 @@ def check_easy_earn(memory):
                 try:
                     pct = float(m)
                     
-                    # Шукаємо тільки пули вище 100%
                     if pct > 100:
                         current_element = s
-                        coin_name = "Знайдено пул"
+                        coin_name = "Невідома монета"
                         duration = "Гнучкий / Фіксований"
                         
-                        # Акуратно підіймаємось вгору по картці (до 6 рівнів), щоб знайти деталі саме ЦЬОГО пулу
-                        for _ in range(6):
+                        # Підіймаємося вгору по структурі картки для збору контексту
+                        for _ in range(7):
                             if not current_element.parent:
                                 break
                             current_element = current_element.parent
                             parent_text = " ".join(current_element.get_text(separator=" ").split())
                             
-                            # Шукаємо тикер монети (великі літери 3-5 символів)
-                            if coin_name == "Знайдено пул":
-                                uppercase_words = re.findall(r'\b([A-Z]{3,5})\b', parent_text)
-                                # Виключаємо технічні слова інтерфейсу
-                                exclude = {'APR', 'BYBIT', 'EARN', 'NEW', 'VIP', 'ROI', 'UTC', 'PROMO', 'CRAZY', 'USER', 'ALL'}
+                            # Визначаємо тикер монети
+                            if coin_name == "Невідома монета":
+                                uppercase_words = re.findall(r'\b([A-Z]{3,6})\b', parent_text)
+                                exclude = {
+                                    'APR', 'BYBIT', 'EARN', 'NEW', 'VIP', 'ROI', 'UTC', 'PROMO', 
+                                    'CRAZY', 'USER', 'ALL', 'THURSDAY', 'BOOST', 'DAY', 'USD', 'EUR'
+                                }
                                 valid_coins = [w for w in uppercase_words if w not in exclude]
                                 if valid_coins:
-                                    coin_name = valid_coins[0] # Беремо найближчу назву монети
+                                    coin_name = valid_coins[0]
                             
-                            # Визначаємо тривалість стейкінгу
+                            # Визначаємо тривалість
                             if duration == "Гнучкий / Фіксований":
                                 if "безстроковий" in parent_text.lower() and "фіксований" in parent_text.lower():
                                     duration = "Гнучкий / Фіксований"
@@ -105,17 +120,24 @@ def check_easy_earn(memory):
                                     if dur_match:
                                         duration = dur_match.group(1)
                         
-                        # Додаємо пул, якщо вдалося розпізнати реальну монету
-                        if coin_name != "Знайдено пул":
-                            found_items.append({
-                                'coin': coin_name,
-                                'pct': pct,
-                                'duration': duration
-                            })
+                        # РЕЗЕРВНИЙ ЗАХИСТ: Якщо регулярний вираз пропустив назву, перевіряємо по списку відомих монет
+                        if coin_name == "Невідома монета":
+                            # Отримуємо фінальний повний текст картки/блоку
+                            full_block_text = " ".join(current_element.get_text(separator=" ").split())
+                            for kc in ['USDT', 'XUSD', 'USDC', 'BTC', 'ETH', 'MNT', 'AERO', 'SOL']:
+                                if kc in full_block_text:
+                                    coin_name = kc
+                                    break
+                        
+                        found_items.append({
+                            'coin': coin_name,
+                            'pct': pct,
+                            'duration': duration
+                        })
                 except ValueError:
                     continue
 
-        # Фільтруємо дублікати
+        # Фільтрація дублікатів
         unique_coins = {}
         for item in found_items:
             coin_id = f"{item['coin']}_{item['pct']}"
@@ -123,7 +145,7 @@ def check_easy_earn(memory):
 
         print(f"[ДЕБАГ] Після очищення знайдено реальних пулів > 100%: {len(unique_coins)}")
 
-        # Надсилаємо сповіщення в Telegram
+        # Надсилання сповіщень
         for coin_id, item in unique_coins.items():
             if coin_id not in memory["coins"]:
                 memory["coins"].append(coin_id)
