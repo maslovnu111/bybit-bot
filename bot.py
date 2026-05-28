@@ -46,7 +46,7 @@ def check_easy_earn(memory):
         driver.get("https://www.bybit.com/uk-UA/earn/easy-earn/")
         time.sleep(8) 
 
-        # ЕМУЛЯЦІЯ СКРОЛІНГУ: прокручуємо вниз і вгору для активації лінивого завантаження карток
+        # Емуляція скролінгу для повного провантаження карток
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(4)
         driver.execute_script("window.scrollTo(0, 0);")
@@ -68,46 +68,50 @@ def check_easy_earn(memory):
             if not parent_box:
                 continue
             
-            # СКЛЕЮВАННЯ ТЕГІВ: беремо текст батька та дідуся, щоб з'єднати розділені цифри та значок %
+            # Склеюємо текст контейнерів, щоб цифри та % не розривались
             combined_text = parent_box.get_text(separator=" ")
             if parent_box.parent:
                 combined_text += " " + parent_box.parent.get_text(separator=" ")
                 
             clean_str = " ".join(combined_text.split())
             
-            # Шукаємо числа біля відсотка
-            pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', clean_str)
+            # ВИПРАВЛЕНО: додано [.,] для розпізнавання українських ком у числах (напр. 150,00%)
+            pct_matches = re.findall(r'(\d+(?:[.,]\d+)?)\s*%', clean_str)
             if not pct_matches:
                 continue
 
             for m in pct_matches:
                 try:
-                    pct = float(m)
+                    # Замінюємо кому на крапку, щоб Python міг конвертувати рядок у float
+                    clean_num = m.replace(',', '.')
+                    pct = float(clean_num)
+                    
+                    # Виводимо у лог знайдені відсотки для повної діагностики
+                    if pct > 0:
+                        print(f"[ДЕБАГ] Знайдено відсоток {pct}% у тексті: '{clean_str[:50]}...'")
                     
                     if pct > 100:
                         current_element = s
-                        coin_name = "Невідома монета"
+                        coin_name = "Шукаємо..."
                         duration = "Гнучкий / Фіксований"
                         
-                        # Підіймаємося вгору по структурі картки для збору контексту
-                        for _ in range(7):
+                        # Збільшено глибину пошуку картки до 10 рівнів
+                        for _ in range(10):
                             if not current_element.parent:
                                 break
                             current_element = current_element.parent
                             parent_text = " ".join(current_element.get_text(separator=" ").split())
                             
-                            # Визначаємо тикер монети
-                            if coin_name == "Невідома монета":
-                                uppercase_words = re.findall(r'\b([A-Z]{3,6})\b', parent_text)
+                            if coin_name == "Шукаємо...":
+                                uppercase_words = re.findall(r'\b([A-Z]{2,6})\b', parent_text)
                                 exclude = {
                                     'APR', 'BYBIT', 'EARN', 'NEW', 'VIP', 'ROI', 'UTC', 'PROMO', 
-                                    'CRAZY', 'USER', 'ALL', 'THURSDAY', 'BOOST', 'DAY', 'USD', 'EUR'
+                                    'CRAZY', 'USER', 'ALL', 'THURSDAY', 'BOOST', 'DAY', 'USD', 'EUR', 'MAX'
                                 }
                                 valid_coins = [w for w in uppercase_words if w not in exclude]
                                 if valid_coins:
                                     coin_name = valid_coins[0]
                             
-                            # Визначаємо тривалість
                             if duration == "Гнучкий / Фіксований":
                                 if "безстроковий" in parent_text.lower() and "фіксований" in parent_text.lower():
                                     duration = "Гнучкий / Фіксований"
@@ -120,15 +124,9 @@ def check_easy_earn(memory):
                                     if dur_match:
                                         duration = dur_match.group(1)
                         
-                        # РЕЗЕРВНИЙ ЗАХИСТ: Якщо регулярний вираз пропустив назву, перевіряємо по списку відомих монет
-                        if coin_name == "Невідома монета":
-                            # Отримуємо фінальний повний текст картки/блоку
-                            full_block_text = " ".join(current_element.get_text(separator=" ").split())
-                            for kc in ['USDT', 'XUSD', 'USDC', 'BTC', 'ETH', 'MNT', 'AERO', 'SOL']:
-                                if kc in full_block_text:
-                                    coin_name = kc
-                                    break
-                        
+                        if coin_name == "Шукаємо...":
+                            coin_name = "Невідома монета"
+                            
                         found_items.append({
                             'coin': coin_name,
                             'pct': pct,
