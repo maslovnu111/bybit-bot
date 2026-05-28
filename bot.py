@@ -44,85 +44,86 @@ def check_easy_earn(memory):
     driver = get_browser()
     try:
         driver.get("https://www.bybit.com/uk-UA/earn/easy-earn/")
-        time.sleep(15) # Даємо 15 секунд на повний рендеринг чисел
+        time.sleep(15) # Очікуємо повного завантаження карток
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
-        # 1. Знаходимо абсолютно всі текстові вузли на сторінці, де є знак %
+        # КРИТИЧНО ВАЖЛИВО: Видаляємо всі приховані технічні блоки, де ховаються "привиди"
+        for tech in soup(["script", "style", "noscript", "textarea", "svg", "form", "head"]):
+            tech.decompose()
+        
+        # Тепер шукаємо відсотки ТІЛЬКИ у видимому тексті сторінки
         percent_strings = soup.find_all(string=lambda t: t and "%" in t)
-        print(f"[ДЕБАГ] Всього текстових елементів із знаком '%' знайдено: {len(percent_strings)}")
+        print(f"[ДЕБАГ] Видимих елементів із знаком '%' знайдено: {len(percent_strings)}")
         
         found_items = []
 
         for s in percent_strings:
             clean_str = " ".join(s.split())
             
-            # Витягуємо всі числа, які стоять біля %
+            # Витягуємо числа біля знаку %
             pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', clean_str)
             if not pct_matches:
-                # На випадок, якщо відсоток розбитий на сусідні теги (число в одному, % в іншому)
-                # Спробуємо очистити сам текст елементу
-                try:
-                    potential_num = clean_str.replace('%', '').replace('+', '').strip()
-                    pct_matches = [str(float(potential_num))]
-                except ValueError:
-                    continue
+                continue
 
             for m in pct_matches:
                 try:
                     pct = float(m)
                     
-                    # Твоя умова: строго більше 100%
+                    # Шукаємо тільки пули вище 100%
                     if pct > 100:
-                        # 2. Починаємо підйом вгору по HTML дереву, щоб знайти контекст (монету та тривалість)
                         current_element = s
                         coin_name = "Знайдено пул"
                         duration = "Гнучкий / Фіксований"
                         
-                        # Підіймаємося максимум на 8 рівнів вгору
-                        for _ in range(8):
-                            if current_element.parent:
-                                current_element = current_element.parent
-                                parent_text = " ".join(current_element.get_text(separator=" ").split())
-                                
-                                # Шукаємо великі літери (тикер монети), ігноруючи технічні слова на кшталт APR
-                                uppercase_words = re.findall(r'\b([A-Z]{3,6})\b', parent_text)
-                                valid_coins = [w for w in uppercase_words if w not in ['APR', 'BYBIT', 'EARN', 'NEW', 'VIP', 'ROI']]
-                                
+                        # Акуратно підіймаємось вгору по картці (до 6 рівнів), щоб знайти деталі саме ЦЬОГО пулу
+                        for _ in range(6):
+                            if not current_element.parent:
+                                break
+                            current_element = current_element.parent
+                            parent_text = " ".join(current_element.get_text(separator=" ").split())
+                            
+                            # Шукаємо тикер монети (великі літери 3-5 символів)
+                            if coin_name == "Знайдено пул":
+                                uppercase_words = re.findall(r'\b([A-Z]{3,5})\b', parent_text)
+                                # Виключаємо технічні слова інтерфейсу
+                                exclude = {'APR', 'BYBIT', 'EARN', 'NEW', 'VIP', 'ROI', 'UTC', 'PROMO', 'CRAZY', 'USER', 'ALL'}
+                                valid_coins = [w for w in uppercase_words if w not in exclude]
                                 if valid_coins:
-                                    coin_name = valid_coins[0] # Беремо першу знайдену монету в блоці
-                                
-                                # Шукаємо тривалість у тексті цього ж батька
-                                if "дн" in parent_text.lower() or "d" in parent_text.lower():
+                                    coin_name = valid_coins[0] # Беремо найближчу назву монети
+                            
+                            # Визначаємо тривалість стейкінгу
+                            if duration == "Гнучкий / Фіксований":
+                                if "безстроковий" in parent_text.lower() and "фіксований" in parent_text.lower():
+                                    duration = "Гнучкий / Фіксований"
+                                elif "безстроковий" in parent_text.lower() or "гнучк" in parent_text.lower():
+                                    duration = "Гнучкий"
+                                elif "фіксований" in parent_text.lower():
+                                    duration = "Фіксований"
+                                elif "дн" in parent_text.lower() or "d" in parent_text.lower():
                                     dur_match = re.search(r'(\d+\s*(?:Дн\.|D|днів|дня|Дн))', parent_text, re.IGNORECASE)
                                     if dur_match:
                                         duration = dur_match.group(1)
-                                elif "безстроковий" in parent_text.lower():
-                                    duration = "Безстроковий"
-                                elif "фіксований" in parent_text.lower():
-                                    duration = "Фіксований"
-                                
-                                # Якщо знайшли і монету, і тривалість — можна далі не підійматися
-                                if coin_name != "Знайдено пул" and duration != "Гнучкий / Фіксований":
-                                    break
                         
-                        found_items.append({
-                            'coin': coin_name,
-                            'pct': pct,
-                            'duration': duration
-                        })
+                        # Додаємо пул, якщо вдалося розпізнати реальну монету
+                        if coin_name != "Знайдено пул":
+                            found_items.append({
+                                'coin': coin_name,
+                                'pct': pct,
+                                'duration': duration
+                            })
                 except ValueError:
                     continue
 
-        # 3. Фільтруємо дублікати пулів за унікальним ID (Коїн + Відсоток)
+        # Фільтруємо дублікати
         unique_coins = {}
         for item in found_items:
             coin_id = f"{item['coin']}_{item['pct']}"
             unique_coins[coin_id] = item
 
-        print(f"[ДЕБАГ] Після фільтрації знайдено унікальних пулів > 100%: {len(unique_coins)}")
+        print(f"[ДЕБАГ] Після очищення знайдено реальних пулів > 100%: {len(unique_coins)}")
 
-        # 4. Надсилаємо сповіщення
+        # Надсилаємо сповіщення в Telegram
         for coin_id, item in unique_coins.items():
             if coin_id not in memory["coins"]:
                 memory["coins"].append(coin_id)
