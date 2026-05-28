@@ -33,6 +33,8 @@ def get_browser():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    # ВСТАНОВЛЮЄМО РОЗМІР ЕКРАНА ПК: щоб Bybit розгорнув повну таблицю продуктів
+    chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
@@ -46,11 +48,15 @@ def check_easy_earn(memory):
         driver.get("https://www.bybit.com/uk-UA/earn/easy-earn/")
         time.sleep(8) 
 
-        # Емуляція скролінгу для повного провантаження карток
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(4)
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(3)
+        # ПЛАВНИЙ ПОКРОКОВИЙ СКРОЛІНГ: Імітуємо коліщатко миші людини, щоб провантажити приховані картки
+        print("[ДЕБАГ] Починаємо покрокову прокрутку сторінки...")
+        for position in [500, 1000, 1500, 2000, 2500]:
+            driver.execute_script(f"window.scrollTo(0, {position});")
+            time.sleep(2) # Даємо 2 секунди на кожному кроці для завантаження контенту
+        
+        # Повертаємось трохи вгору
+        driver.execute_script("window.scrollTo(0, 200);")
+        time.sleep(2)
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
@@ -75,27 +81,26 @@ def check_easy_earn(memory):
                 
             clean_str = " ".join(combined_text.split())
             
-            # ВИПРАВЛЕНО: додано [.,] для розпізнавання українських ком у числах (напр. 150,00%)
+            # Шукаємо відсотки з підтримкою крапки та коми
             pct_matches = re.findall(r'(\d+(?:[.,]\d+)?)\s*%', clean_str)
             if not pct_matches:
                 continue
 
             for m in pct_matches:
                 try:
-                    # Замінюємо кому на крапку, щоб Python міг конвертувати рядок у float
                     clean_num = m.replace(',', '.')
                     pct = float(clean_num)
                     
-                    # Виводимо у лог знайдені відсотки для повної діагностики
+                    # Виводимо у лог абсолютно все для повної прозорості
                     if pct > 0:
-                        print(f"[ДЕБАГ] Знайдено відсоток {pct}% у тексті: '{clean_str[:50]}...'")
+                        print(f"[ДЕБАГ] Знайдено відсоток {pct}% у тексті: '{clean_str[:60]}...'")
                     
                     if pct > 100:
                         current_element = s
                         coin_name = "Шукаємо..."
                         duration = "Гнучкий / Фіксований"
                         
-                        # Збільшено глибину пошуку картки до 10 рівнів
+                        # Глибокий аналіз картки до 10 рівнів вгору
                         for _ in range(10):
                             if not current_element.parent:
                                 break
