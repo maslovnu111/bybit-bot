@@ -1,0 +1,37 @@
+name: Bybit Hourly Scanner
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Запускати на початку кожної години
+  workflow_dispatch:     # Дозволяє запускати бота вручну кнопкою
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Копіюємо код репозиторію
+      uses: actions/checkout@v3
+
+    - name: Налаштовуємо Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Встановлюємо залежності
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Запускаємо скрипт бота
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python bot.py
+
+    - name: Зберігаємо оновлену пам'ять назад в GitHub
+      run: |
+        git config --local user.email "actions@github.com"
+        git config --local user.name "GitHub Actions Bot"
+        git add memory.json
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Оновлено пам'ять коінів [skip ci]" && git push)
